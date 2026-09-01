@@ -1,0 +1,67 @@
+cv_logit_auc
+function(
+        data,
+        outcome,
+        predictors,
+        
+        nfolds = 5,
+        nrepeat = 100,
+        
+        seed = 123
+) {
+    
+    set.seed(seed)
+    
+    data[[outcome]] <- factor(
+        data[[outcome]],
+        levels = c(0,1),
+        labels = c("TD","ADHD")
+    )
+    
+    formula_str <- as.formula(
+        paste(
+            outcome,
+            "~",
+            paste(predictors, collapse = " + ")
+        )
+    )
+    
+    ctrl <- trainControl(
+        method = "repeatedcv",
+        
+        number = nfolds,
+        repeats = nrepeat,
+        
+        classProbs = TRUE,
+        
+        summaryFunction = twoClassSummary,
+        
+        savePredictions = TRUE
+    )
+    
+    model <- train(
+        formula_str,
+        
+        data = data,
+        
+        method = "glm",
+        family = "binomial",
+        
+        metric = "ROC",
+        
+        trControl = ctrl
+    )
+    
+    ci_results <- get_repeat_level_ci(model)
+    
+    return(list(
+        model = model,
+        
+        repeat_means = ci_results$repeat_means,
+        
+        mean_auc = ci_results$mean_auc,
+        
+        ci_lower = ci_results$ci_lower,
+        ci_upper = ci_results$ci_upper
+    ))
+}
