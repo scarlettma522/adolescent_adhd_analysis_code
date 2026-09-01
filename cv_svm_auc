@@ -1,3 +1,4 @@
+library(caret)
 cv_svm_auc <- function(
         data,
         outcome,
