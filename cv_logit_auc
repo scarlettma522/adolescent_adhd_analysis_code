@@ -1,3 +1,4 @@
+library(caret)
 cv_logit_auc
 function(
         data,
