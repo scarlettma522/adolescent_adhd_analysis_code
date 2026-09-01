@@ -1,0 +1,47 @@
+get_repeat_level_ci <- function(model) {
+    
+    # fold-level ROC values
+    roc_values <- model$resample$ROC
+    
+    # repeat labels
+    # Example:
+    # "Fold1.Rep1" -> "Rep1"
+    repeat_ids <- sub(
+        "Fold[0-9]+\\.Rep",
+        "",
+        model$resample$Resample
+    )
+    
+    # average across folds within each repeat
+    repeat_means <- tapply(
+        roc_values,
+        repeat_ids,
+        mean,
+        na.rm = TRUE
+    )
+    
+    # mean repeated-CV AUC
+    mean_auc <- mean(repeat_means)
+    
+    # empirical 95% CI
+    ci_lower <- quantile(
+        repeat_means,
+        probs = 0.025,
+        na.rm = TRUE
+    )
+    
+    ci_upper <- quantile(
+        repeat_means,
+        probs = 0.975,
+        na.rm = TRUE
+    )
+    
+    return(list(
+        repeat_means = repeat_means,
+        
+        mean_auc = mean_auc,
+        
+        ci_lower = ci_lower,
+        ci_upper = ci_upper
+    ))
+}
