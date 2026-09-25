@@ -1,1 +1,564 @@
-
+repeat_logit_cv <- function(
+        df,
+        predictors = c("x1", "x2", "x3"),
+        outcome = "group",
+        number_repeats = 100,
+        number_folds = 5
+) {
+    
+    require(pROC)
+    
+    # =========================================================
+    # 0. BASIC CHECKS
+    # =========================================================
+    
+    if (!all(c(outcome, "age", predictors) %in% names(df))) {
+        
+        missing_vars <- setdiff(
+            c(outcome, "age", predictors),
+            names(df)
+        )
+        
+        stop(
+            paste(
+                "The following variables are missing:",
+                paste(missing_vars, collapse = ", ")
+            )
+        )
+    }
+    
+    dat <- df[
+        ,
+        c(outcome, "age", predictors),
+        drop = FALSE
+    ]
+    
+    dat <- na.omit(dat)
+    
+    # IMPORTANT
+    dat[[outcome]] <- factor(
+        dat[[outcome]]
+    )
+    
+    y <- dat[[outcome]]
+    
+    if (length(unique(y)) != 2) {
+        stop(
+            "Outcome must contain exactly two groups."
+        )
+    }
+    
+    if (any(table(y) < number_folds)) {
+        stop(
+            paste(
+                "At least one outcome group has fewer observations than",
+                number_folds,
+                "required folds."
+            )
+        )
+    }
+    
+    for (v in predictors) {
+        
+        if (!is.numeric(dat[[v]])) {
+            
+            stop(
+                paste(
+                    "Predictor", v,
+                    "must be numeric."
+                )
+            )
+        }
+    }
+    
+    if (!is.numeric(dat$age)) {
+        stop("age must be numeric.")
+    }
+    
+    
+    # =========================================================
+    # STORE RESULTS
+    # =========================================================
+    
+    repeat_auc <- numeric(
+        number_repeats
+    )
+    
+    
+    # =========================================================
+    # REPEATED CV
+    # =========================================================
+    
+    for (r in 1:number_repeats) {
+        
+        # -------------------------------------------------------
+        # STRATIFIED FOLD ASSIGNMENT
+        # -------------------------------------------------------
+        
+        fold_id <- integer(
+            nrow(dat)
+        )
+        
+        for (g in levels(y)) {
+            
+            idx <- which(
+                y == g
+            )
+            
+            idx <- sample(
+                idx,
+                length(idx)
+            )
+            
+            fold_id[idx] <- rep(
+                1:number_folds,
+                length.out = length(idx)
+            )
+        }
+        
+        fold_auc <- numeric(
+            number_folds
+        )
+        
+        
+        # =======================================================
+        # K FOLDS
+        # =======================================================
+        
+        for (k in 1:number_folds) {
+            
+            cat(
+                "Repeat", r,
+                "/", number_repeats,
+                "- Fold", k,
+                "/", number_folds,
+                "\n"
+            )
+            
+            train_idx <- which(
+                fold_id != k
+            )
+            
+            test_idx <- which(
+                fold_id == k
+            )
+            
+            train <- dat[
+                train_idx,
+                ,
+                drop = FALSE
+            ]
+            
+            test <- dat[
+                test_idx,
+                ,
+                drop = FALSE
+            ]
+            
+            
+            # =====================================================
+            # 1. AGE RESIDUALIZATION
+            # =====================================================
+            
+            train_x <- matrix(
+                NA_real_,
+                nrow = nrow(train),
+                ncol = length(predictors)
+            )
+            
+            test_x <- matrix(
+                NA_real_,
+                nrow = nrow(test),
+                ncol = length(predictors)
+            )
+            
+            colnames(train_x) <- predictors
+            colnames(test_x) <- predictors
+            
+            
+            for (j in seq_along(predictors)) {
+                
+                v <- predictors[j]
+                
+                age_model <- lm(
+                    train[[v]] ~ train$age
+                )
+                
+                train_x[, j] <- residuals(
+                    age_model
+                )
+                
+                beta <- coef(
+                    age_model
+                )
+                
+                test_pred <- beta[1] +
+                    beta[2] * test$age
+                
+                test_x[, j] <-
+                    test[[v]] - test_pred
+            }
+            
+            
+            # =====================================================
+            # 2. FEATURE SELECTION
+            # =====================================================
+            
+            p_values <- numeric(
+                length(predictors)
+            )
+            
+            for (j in seq_along(predictors)) {
+                
+                tmp <- data.frame(
+                    x = train_x[, j],
+                    y = train[[outcome]]
+                )
+                
+                p_values[j] <- tryCatch(
+                    
+                    t.test(
+                        x ~ y,
+                        data = tmp
+                    )$p.value,
+                    
+                    error = function(e) NA_real_
+                )
+            }
+            
+            p_adj <- p.adjust(
+                p_values,
+                method = "bonferroni"
+            )
+            
+            selected <- predictors[
+                !is.na(p_adj) &
+                    p_adj < 0.05
+            ]
+            
+            cat(
+                "  Selected features:",
+                length(selected),
+                "\n"
+            )
+            
+            
+            if (length(selected) == 0) {
+                
+                warning(
+                    paste(
+                        "Repeat", r,
+                        "Fold", k,
+                        ": no predictors survived Bonferroni correction."
+                    )
+                )
+                
+                fold_auc[k] <- NA_real_
+                next
+            }
+            
+            
+            train_x_sel <- train_x[
+                ,
+                selected,
+                drop = FALSE
+            ]
+            
+            test_x_sel <- test_x[
+                ,
+                selected,
+                drop = FALSE
+            ]
+            
+            
+            # =====================================================
+            # 3. STANDARDIZATION
+            # =====================================================
+            
+            train_mean <- apply(
+                train_x_sel,
+                2,
+                mean
+            )
+            
+            train_sd <- apply(
+                train_x_sel,
+                2,
+                sd
+            )
+            
+            keep <- (
+                train_sd > 0 &
+                    !is.na(train_sd) &
+                    is.finite(train_sd)
+            )
+            
+            train_x_sel <- train_x_sel[
+                ,
+                keep,
+                drop = FALSE
+            ]
+            
+            test_x_sel <- test_x_sel[
+                ,
+                keep,
+                drop = FALSE
+            ]
+            
+            train_mean <- train_mean[
+                keep
+            ]
+            
+            train_sd <- train_sd[
+                keep
+            ]
+            
+            
+            if (ncol(train_x_sel) == 0) {
+                
+                warning(
+                    paste(
+                        "Repeat", r,
+                        "Fold", k,
+                        ": no non-zero-variance predictors remain."
+                    )
+                )
+                
+                fold_auc[k] <- NA_real_
+                next
+            }
+            
+            
+            train_x_scaled <- scale(
+                train_x_sel,
+                center = train_mean,
+                scale = train_sd
+            )
+            
+            test_x_scaled <- scale(
+                test_x_sel,
+                center = train_mean,
+                scale = train_sd
+            )
+            
+            
+            # =====================================================
+            # 4. LOGISTIC REGRESSION
+            # =====================================================
+            
+            train_model_data <- data.frame(
+                outcome = train[[outcome]],
+                train_x_scaled,
+                check.names = FALSE
+            )
+            
+            # Make syntactically valid predictor names
+            colnames(train_model_data)[-1] <-
+                make.names(
+                    colnames(train_x_scaled),
+                    unique = TRUE
+                )
+            
+            test_model_data <- data.frame(
+                test_x_scaled,
+                check.names = FALSE
+            )
+            
+            colnames(test_model_data) <-
+                colnames(train_model_data)[-1]
+            
+            formula_logit <- as.formula(
+                paste(
+                    "outcome ~",
+                    paste(
+                        colnames(train_model_data)[-1],
+                        collapse = " + "
+                    )
+                )
+            )
+            
+            
+            logit_model <- tryCatch(
+                
+                glm(
+                    formula_logit,
+                    data = train_model_data,
+                    family = binomial()
+                ),
+                
+                error = function(e) {
+                    
+                    cat("\n==============================\n")
+                    cat("ERROR: LOGISTIC REGRESSION FAILED\n")
+                    cat("Repeat:", r, "\n")
+                    cat("Fold:", k, "\n")
+                    cat("==============================\n\n")
+                    
+                    stop(e)
+                }
+            )
+            
+            
+            # =====================================================
+            # 5. PREDICT HELD-OUT FOLD
+            # =====================================================
+            
+            test_prob <- predict(
+                logit_model,
+                newdata = test_model_data,
+                type = "response"
+            )
+            
+            
+            # =====================================================
+            # 6. AUC
+            # =====================================================
+            
+            response_test <- factor(
+                test[[outcome]],
+                levels = levels(y)
+            )
+            
+            valid <- complete.cases(
+                response_test,
+                test_prob
+            )
+            
+            if (sum(valid) == 0) {
+                
+                fold_auc[k] <- NA_real_
+                next
+            }
+            
+            if (
+                length(
+                    unique(
+                        response_test[valid]
+                    )
+                ) != 2
+            ) {
+                
+                fold_auc[k] <- NA_real_
+                next
+            }
+            
+            
+            roc_obj <- pROC::roc(
+                response = response_test[valid],
+                predictor = test_prob[valid],
+                levels = levels(y),
+                direction = "<",
+                quiet = TRUE
+            )
+            
+            fold_auc[k] <- as.numeric(
+                pROC::auc(roc_obj)
+            )
+            
+            cat(
+                "  Fold AUC:",
+                round(fold_auc[k], 4),
+                "\n\n"
+            )
+        }
+        
+        
+        # =======================================================
+        # 7. REPEAT-LEVEL AUC
+        # =======================================================
+        
+        repeat_auc[r] <- mean(
+            fold_auc,
+            na.rm = TRUE
+        )
+        
+        cat(
+            ">>> Repeat", r,
+            "mean AUC:",
+            round(repeat_auc[r], 4),
+            "\n\n"
+        )
+    }
+    
+    
+    # =========================================================
+    # 8. EMPIRICAL 95% CI
+    # =========================================================
+    
+    valid_repeat <- !is.na(
+        repeat_auc
+    )
+    
+    repeat_auc_valid <- repeat_auc[
+        valid_repeat
+    ]
+    
+    mean_auc <- mean(
+        repeat_auc_valid
+    )
+    
+    ci <- quantile(
+        repeat_auc_valid,
+        probs = c(
+            0.025,
+            0.975
+        ),
+        na.rm = TRUE,
+        names = FALSE,
+        type = 7
+    )
+    
+    ci_lower <- ci[1]
+    ci_upper <- ci[2]
+    
+    n <- length(
+        repeat_auc_valid
+    )
+    
+    
+    # =========================================================
+    # FINAL RESULTS
+    # =========================================================
+    
+    cat("\n========================================\n")
+    cat("FINAL RESULTS\n")
+    cat("========================================\n")
+    
+    cat(
+        "Valid repeats:",
+        n,
+        "/",
+        number_repeats,
+        "\n"
+    )
+    
+    cat(
+        "Mean AUC:",
+        round(mean_auc, 4),
+        "\n"
+    )
+    
+    cat(
+        "Empirical 95% CI:",
+        round(ci_lower, 4),
+        "-",
+        round(ci_upper, 4),
+        "\n"
+    )
+    
+    cat("========================================\n")
+    
+    
+    return(
+        list(
+            average_auc = mean_auc,
+            auc_95CI_lower = ci_lower,
+            auc_95CI_upper = ci_upper,
+            auc_95CI = c(
+                ci_lower,
+                ci_upper
+            ),
+            repeat_auc = repeat_auc
+        )
+    )
+}
