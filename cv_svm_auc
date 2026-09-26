@@ -17,9 +17,9 @@ repeat_svm_cv <- function(
     # 0. BASIC CHECKS
     # =========================================================
     
-    if (!all(c(outcome, "age", predictors) %in% names(df))) {
+    if (!all(c(outcome, "age", "Gender", predictors) %in% names(df))) {
         missing_vars <- setdiff(
-            c(outcome, "age", predictors),
+            c(outcome, "age", "Gender", predictors),
             names(df)
         )
         
@@ -31,7 +31,7 @@ repeat_svm_cv <- function(
         )
     }
     
-    dat <- df[, c(outcome, "age", predictors), drop = FALSE]
+    dat <- df[, c(outcome, "age", "Gender", predictors), drop = FALSE]
     dat <- na.omit(dat)
     
     # Convert outcome to factor BEFORE splitting into train/test
@@ -145,7 +145,7 @@ repeat_svm_cv <- function(
             
             
             # =====================================================
-            # 1. AGE RESIDUALIZATION
+            # 1. AGE AND GENDER RESIDUALIZATION
             # =====================================================
             
             train_x <- matrix(
@@ -163,27 +163,28 @@ repeat_svm_cv <- function(
             colnames(train_x) <- predictors
             colnames(test_x) <- predictors
             
+            
             for (j in seq_along(predictors)) {
                 
                 v <- predictors[j]
                 
-                # Fit age relationship ONLY in training data
-                age_model <- lm(
-                    train[[v]] ~ train$age
+                age_gender_model <- lm(
+                    as.formula(paste(v, "~ age + Gender")),
+                    data = train
                 )
                 
-                # Training residuals
-                train_x[, j] <- residuals(age_model)
+                train_x[, j] <- residuals(
+                    age_gender_model
+                )
                 
-                # Apply SAME fitted relationship to test data
-                beta <- coef(age_model)
+                test_pred <- predict(
+                    age_gender_model,
+                    newdata = test
+                )
                 
-                test_pred <- beta[1] +
-                    beta[2] * test$age
-                
-                test_x[, j] <- test[[v]] - test_pred
+                test_x[, j] <-
+                    test[[v]] - test_pred
             }
-            
             
             # =====================================================
             # DEBUG: CHECK RESIDUALIZATION
