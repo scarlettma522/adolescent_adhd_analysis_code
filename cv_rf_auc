@@ -15,10 +15,9 @@ repeat_rf_cv <- function(
     # 0. BASIC CHECKS
     # =========================================================
     
-    if (!all(c(outcome, "age", predictors) %in% names(df))) {
-        
+    if (!all(c(outcome, "age", "Gender", predictors) %in% names(df))) {
         missing_vars <- setdiff(
-            c(outcome, "age", predictors),
+            c(outcome, "age", "Gender", predictors),
             names(df)
         )
         
@@ -32,7 +31,7 @@ repeat_rf_cv <- function(
     
     dat <- df[
         ,
-        c(outcome, "age", predictors),
+        c(outcome, "age", "Gender", predictors),
         drop = FALSE
     ]
     
@@ -141,7 +140,7 @@ repeat_rf_cv <- function(
             
             
             # =====================================================
-            # 1. AGE RESIDUALIZATION
+            # 1. AGE AND GENDER RESIDUALIZATION
             # =====================================================
             
             train_x <- matrix(
@@ -164,23 +163,23 @@ repeat_rf_cv <- function(
                 
                 v <- predictors[j]
                 
-                age_model <- lm(
-                    train[[v]] ~ train$age
+                age_gender_model <- lm(
+                    as.formula(paste(v, "~ age + Gender")),
+                    data = train
                 )
                 
                 train_x[, j] <- residuals(
-                    age_model
+                    age_gender_model
                 )
                 
-                beta <- coef(age_model)
-                
-                test_pred <- beta[1] +
-                    beta[2] * test$age
+                test_pred <- predict(
+                    age_gender_model,
+                    newdata = test
+                )
                 
                 test_x[, j] <-
                     test[[v]] - test_pred
             }
-            
             
             # =====================================================
             # 2. FEATURE SELECTION
